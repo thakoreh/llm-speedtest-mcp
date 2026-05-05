@@ -1,0 +1,5 @@
+src/
+tsconfig.json
+.gitignore
+.npmignore
+.DS_Store
