@@ -31,7 +31,7 @@
 - Keys are passed as HTTP headers in `fetch()` calls to the respective provider API
 - OpenAI-compatible: `Authorization: Bearer ${key}`
 - Anthropic: `x-api-key: ${key}`
-- Keys are held in memory for the duration of the HTTP request only
+- Keys remain in the server's environment for its lifetime and are read when a request runs
 - Keys are never written to disk, logs, console, or any output
 
 ### How Keys Are NOT Used
@@ -72,6 +72,7 @@ The tool makes HTTPS connections **only** to the following endpoints:
 | Package | Purpose | Verified Safe |
 |---------|---------|---------------|
 | `@modelcontextprotocol/sdk` | MCP protocol implementation | ✅ Official MCP SDK by Anthropic |
+| `zod` | MCP tool argument schemas | Directly imported runtime dependency |
 
 ### Dev Dependencies
 | Package | Purpose |
@@ -79,7 +80,7 @@ The tool makes HTTPS connections **only** to the following endpoints:
 | `typescript` | Compile-time only |
 | `@types/node` | Compile-time only |
 
-**Total runtime dependencies: 1** (the MCP SDK)
+**Total direct runtime dependencies: 2** (the MCP SDK and Zod). Their transitive dependencies are recorded in `package-lock.json`.
 
 No analytics, no tracking, no heavy frameworks. The entire runtime dependency tree is minimal.
 
@@ -104,7 +105,7 @@ No analytics, no tracking, no heavy frameworks. The entire runtime dependency tr
 
 The entire source is under 500 lines in a single file (`src/index.ts`). To audit:
 
-1. **Check imports** — Only MCP SDK and Node.js built-ins. No suspicious imports.
+1. **Check imports** - MCP SDK and Zod.
 2. **Check network calls** — All `fetch()` calls use hardcoded URLs from the `PROVIDERS` array.
 3. **Check key usage** — Search for `getKey()` and `apiKey` — only used in HTTP headers.
 4. **Check file I/O** — Search for `fs`, `readFile`, `writeFile` — none exist.

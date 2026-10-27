@@ -6,7 +6,7 @@ Run it locally inside your AI tool (Claude Desktop, Cursor, Hermes, etc.) and sa
 
 ## 🚀 Quick Start
 
-Install from source with Node.js 18 or newer. The package is not currently published on npm, so use the built local entry point rather than `npx llm-speedtest-mcp`.
+Install from source with Node.js 20 or newer (required by the patched dependency tree). The package is not currently published on npm, so use the built local entry point rather than `npx llm-speedtest-mcp`.
 
 ```bash
 git clone https://github.com/thakoreh/llm-speedtest-mcp.git
@@ -78,6 +78,10 @@ Runs a standardized prompt through all detected providers. Measures:
 
 ### `benchmark_model`
 Benchmark a single specific model with a custom prompt.
+
+Both benchmark tools accept an optional `timeout_ms` (1–300000, default 60000) per model. MCP cancellation aborts the provider requests. Failed requests return `isError: true` for a single benchmark or when all models fail; mixed results retain per-model error rows. Provider error bodies and network exception text are omitted because they can contain credentials. HTTP errors retain their status code.
+
+Run `node dist/index.js --help` for command usage or `--version` for the package version. With no arguments the process serves MCP over stdio; it does not print a prompt.
 
 ## 📊 Example Output
 
@@ -162,7 +166,7 @@ These are built-in example model IDs, not a live availability catalog. Check the
 1. **Reads keys from env only** — No custom key input, no forms, no prompts for keys.
 2. **Keys never logged** — Not in console, not in debug output, not in error messages.
 3. **Direct provider calls** — Each API call goes straight from `fetch()` to the provider's API endpoint.
-4. **No dependencies** beyond the MCP SDK — No axios, no analytics packages, no tracking.
+4. **Runtime dependencies are the MCP SDK and Zod** - No axios, analytics packages, or tracking in this server's application code.
 5. **No file I/O** — The server reads env vars and makes HTTP requests. That's it.
 6. **Auditable** — The entire source is under 500 lines. Read every line in 5 minutes.
 
@@ -189,9 +193,10 @@ Empty-text streams produce an error instead of a fabricated token count or a ben
 
 ```bash
 npm test
+npm run test:package
 ```
 
-The tests start the real MCP server over stdio using the SDK client. A preload replaces provider fetch calls and the clock with local fixtures. Both provider formats are checked for elapsed TTFT, estimated TPS, fragmented UTF-8/CRLF data, and empty responses. Test fixtures use dummy keys and never call a provider API.
+The tests start the real MCP server over stdio using the SDK client in fresh subprocesses. Preloads replace provider fetch calls with local fixtures. Tests cover both stream formats, elapsed timing, fragmented UTF-8/CRLF data, all eight providers, missing/invalid input, errors after partial output, credential-safe errors, timeouts, cancellation, repeated calls, and command help. Test fixtures use dummy keys and never call a provider API. `test:package` builds a tarball, installs it with production dependencies in a separate temporary directory, and reruns the MCP tests against the installed entry point. Package installation needs registry access; the provider tests remain offline.
 
 ## 📄 License
 
