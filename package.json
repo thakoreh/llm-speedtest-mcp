@@ -1,6 +1,6 @@
 {
   "name": "llm-speedtest-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Benchmark AI model inference speed — like speedtest.net but for LLMs. MCP server for Claude Desktop, Cursor, Hermes, etc.",
   "main": "dist/index.js",
   "bin": {
@@ -44,6 +44,7 @@
   "files": [
     "dist/",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "SECURITY.md"
   ]

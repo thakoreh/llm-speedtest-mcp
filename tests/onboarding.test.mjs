@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,6 +11,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 const entry = process.env.QA_ENTRY || fileURLToPath(new URL('../dist/index.js', import.meta.url));
 const fixture = fileURLToPath(new URL('./fixtures/failures.cjs', import.meta.url));
 const secret = 'dummy-not-a-real-key';
+const expectedVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 const textOf = result => result.content.map(item => item.text || '').join('\n');
 async function session(env, run) {
   const home = await mkdtemp(join(tmpdir(), 'speedtest-qa-'));
@@ -27,6 +28,7 @@ const call = (client, args = {}, options) => client.callTool({ name: 'benchmark_
 
 test('fresh session: handshake, list, missing keys, unknown provider/model and repeated calls', async () => {
   await session({}, async client => {
+    assert.equal(client.getServerVersion()?.version, expectedVersion);
     assert.deepEqual((await client.listTools()).tools.map(t => t.name).sort(), ['benchmark_model', 'benchmark_models', 'list_providers']);
     assert.match(textOf(await client.callTool({ name: 'list_providers', arguments: {} })), /0\/8 providers configured/);
     assert.match(textOf(await client.callTool({ name: 'benchmark_models', arguments: {} })), /No providers configured/);
