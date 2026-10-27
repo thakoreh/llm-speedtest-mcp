@@ -11,9 +11,14 @@ Install from source with Node.js 20 or newer (required by the patched dependency
 ```bash
 git clone https://github.com/thakoreh/llm-speedtest-mcp.git
 cd llm-speedtest-mcp
+git checkout v0.1.1
 npm ci
 npm run build
+node dist/index.js --version
 ```
+
+The tested source release is `v0.1.1`. See [CHANGELOG.md](CHANGELOG.md).
+The GitHub tag pins the source installation; the package remains unpublished on npm.
 
 Use the absolute path to `dist/index.js` in your MCP client configuration. On Windows, forward slashes work in JSON paths, for example `C:/tools/llm-speedtest-mcp/dist/index.js`.
 

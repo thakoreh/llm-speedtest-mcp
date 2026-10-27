@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import assert from 'node:assert/strict';
 const consumer = mkdtempSync(join(tmpdir(), 'speedtest-consumer-'));
 const npmCli = process.env.npm_execpath;
 if (!npmCli) throw new Error('Run via npm run test:package');
@@ -18,6 +19,7 @@ try {
   const entry = join(consumer, 'node_modules', 'llm-speedtest-mcp', 'dist', 'index.js');
   const manifest = JSON.parse(readFileSync(join(consumer, 'node_modules', 'llm-speedtest-mcp', 'package.json')));
   if (!manifest.dependencies.zod) throw new Error('Direct Zod runtime dependency missing');
+  assert.equal(run(process.execPath, [entry, '--version']).trim(), manifest.version);
   process.stdout.write(run(process.execPath, ['--test', resolve('tests/benchmark.test.mjs'), resolve('tests/onboarding.test.mjs')],
     { env: { ...process.env, QA_ENTRY: entry } }));
 } finally { rmSync(consumer, { recursive: true, force: true }); }
