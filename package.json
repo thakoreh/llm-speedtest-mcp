@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node --test tests/benchmark.test.mjs",
     "start": "node dist/index.js",
     "prepack": "npm run build"
   },

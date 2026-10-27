@@ -6,13 +6,16 @@ Run it locally inside your AI tool (Claude Desktop, Cursor, Hermes, etc.) and sa
 
 ## 🚀 Quick Start
 
-```bash
-# Install globally
-npm install -g llm-speedtest-mcp
+Install from source with Node.js 18 or newer. The package is not currently published on npm, so use the built local entry point rather than `npx llm-speedtest-mcp`.
 
-# Or use directly with npx
-npx llm-speedtest-mcp
+```bash
+git clone https://github.com/thakoreh/llm-speedtest-mcp.git
+cd llm-speedtest-mcp
+npm ci
+npm run build
 ```
+
+Use the absolute path to `dist/index.js` in your MCP client configuration. On Windows, forward slashes work in JSON paths, for example `C:/tools/llm-speedtest-mcp/dist/index.js`.
 
 ### Configure in Claude Desktop
 
@@ -22,8 +25,8 @@ Add to your `claude_desktop_config.json`:
 {
   "mcpServers": {
     "llm-speedtest": {
-      "command": "npx",
-      "args": ["-y", "llm-speedtest-mcp"]
+      "command": "node",
+      "args": ["/absolute/path/to/llm-speedtest-mcp/dist/index.js"]
     }
   }
 }
@@ -37,8 +40,8 @@ Add to your `.cursor/mcp.json`:
 {
   "mcpServers": {
     "llm-speedtest": {
-      "command": "npx",
-      "args": ["-y", "llm-speedtest-mcp"]
+      "command": "node",
+      "args": ["/absolute/path/to/llm-speedtest-mcp/dist/index.js"]
     }
   }
 }
@@ -78,6 +81,8 @@ Benchmark a single specific model with a custom prompt.
 
 ## 📊 Example Output
 
+Illustrative output only; these values are not measured benchmark evidence or current provider rankings.
+
 ```
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║                    LLM SPEED TEST RESULTS                                ║
@@ -95,6 +100,8 @@ Benchmark a single specific model with a custom prompt.
 ```
 
 ## 🏗️ Supported Providers
+
+These are built-in example model IDs, not a live availability catalog. Check the provider's current documentation before running; unavailable models return errors. The source's `PROVIDERS` table controls the accepted IDs.
 
 | Provider | Env Variable | Models |
 |----------|-------------|--------|
@@ -168,6 +175,23 @@ npm install
 npm run build
 npm start
 ```
+
+### How to interpret the numbers
+
+- TTFT is elapsed time from starting the HTTP request to receiving the first text delta, including network and server delay. It does not measure the first hidden reasoning token.
+- Total latency runs from request start until the stream ends.
+- Output tokens are estimated as roughly four JavaScript string characters per token. TPS uses that estimate divided by the elapsed interval after the first text delta. It is not a provider-reported token count or billing measure.
+- `benchmark_models` runs the configured model requests concurrently. A single run is a local observation, not a controlled provider comparison or a quality evaluation.
+
+Empty-text streams produce an error instead of a fabricated token count or a benchmark winner.
+
+### Offline regression tests
+
+```bash
+npm test
+```
+
+The tests start the real MCP server over stdio using the SDK client. A preload replaces provider fetch calls and the clock with local fixtures. Both provider formats are checked for elapsed TTFT, estimated TPS, fragmented UTF-8/CRLF data, and empty responses. Test fixtures use dummy keys and never call a provider API.
 
 ## 📄 License
 

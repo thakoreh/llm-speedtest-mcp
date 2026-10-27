@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // llm-speedtest-mcp — Benchmark AI model inference speed via MCP
-// Pure local execution. No telemetry. No callhome. Keys never leave this process.
+// Local execution, no telemetry. Keys are sent directly to the tested provider.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -104,6 +104,33 @@ function estimateTokens(text: string): number {
   return Math.max(1, Math.round(text.length / 4));
 }
 
+// Network chunks do not necessarily end at an SSE data-line boundary.
+async function* readDataLines(response: Response): AsyncGenerator<string> {
+  if (!response.body) throw new Error("Provider response has no streaming body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      pending += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      let end: number;
+      while ((end = pending.indexOf("\n")) >= 0) {
+        const line = pending.slice(0, end).trim();
+        pending = pending.slice(end + 1);
+        if (line.startsWith("data:")) yield line.slice(5).trimStart();
+      }
+      if (done) {
+        const line = pending.trim();
+        if (line.startsWith("data:")) yield line.slice(5).trimStart();
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // ─── Streaming Benchmark: OpenAI-compatible ──────────────────────────────────────
 
 async function benchmarkOpenAI(
@@ -136,39 +163,29 @@ async function benchmarkOpenAI(
     throw new Error(`HTTP ${response.status}: ${errText.slice(0, 200)}`);
   }
 
-  const reader = response.body!.getReader();
-  const decoder = new TextDecoder();
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    for (const line of chunk.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith("data: ")) continue;
-      const data = trimmed.slice(6);
-      if (data === "[DONE]") break;
-      try {
-        const parsed = JSON.parse(data);
-        const delta = parsed.choices?.[0]?.delta?.content;
-        if (delta) {
-          if (ttft === null) ttft = performance.now();
-          fullText += delta;
-        }
-      } catch {
-        // skip malformed chunks
+  for await (const data of readDataLines(response)) {
+    if (data === "[DONE]") break;
+    try {
+      const parsed = JSON.parse(data);
+      const delta = parsed.choices?.[0]?.delta?.content;
+      if (delta) {
+        if (ttft === null) ttft = performance.now() - startTime;
+        fullText += delta;
       }
+    } catch {
+      // Ignore non-JSON protocol lines; complete data lines are retained across reads.
     }
   }
 
+  if (ttft === null || !fullText) throw new Error("No text content received from provider");
   const totalMs = performance.now() - startTime;
   const tokens = estimateTokens(fullText);
-  const generationMs = totalMs - (ttft ?? 0);
+  const generationMs = totalMs - ttft;
 
   return {
     provider: provider.name,
     model,
-    ttft: Math.round(ttft ?? 0),
+    ttft: Math.round(ttft),
     tps: generationMs > 0 ? Math.round((tokens / generationMs) * 1000 * 100) / 100 : 0,
     totalMs: Math.round(totalMs),
     tokens,
@@ -209,36 +226,28 @@ async function benchmarkAnthropic(
     throw new Error(`HTTP ${response.status}: ${errText.slice(0, 200)}`);
   }
 
-  const reader = response.body!.getReader();
-  const decoder = new TextDecoder();
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    for (const line of chunk.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data: ")) continue;
-      try {
-        const parsed = JSON.parse(trimmed.slice(6));
-        if (parsed.type === "content_block_delta" && parsed.delta?.text) {
-          if (ttft === null) ttft = performance.now();
-          fullText += parsed.delta.text;
-        }
-      } catch {
-        // skip
+  for await (const data of readDataLines(response)) {
+    if (data === "[DONE]") break;
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed.type === "content_block_delta" && parsed.delta?.text) {
+        if (ttft === null) ttft = performance.now() - startTime;
+        fullText += parsed.delta.text;
       }
+    } catch {
+      // Ignore non-JSON protocol lines; complete data lines are retained across reads.
     }
   }
 
+  if (ttft === null || !fullText) throw new Error("No text content received from provider");
   const totalMs = performance.now() - startTime;
   const tokens = estimateTokens(fullText);
-  const generationMs = totalMs - (ttft ?? 0);
+  const generationMs = totalMs - ttft;
 
   return {
     provider: provider.name,
     model,
-    ttft: Math.round(ttft ?? 0),
+    ttft: Math.round(ttft),
     tps: generationMs > 0 ? Math.round((tokens / generationMs) * 1000 * 100) / 100 : 0,
     totalMs: Math.round(totalMs),
     tokens,
@@ -333,7 +342,7 @@ server.tool(
   "benchmark_models",
   "Run a speed benchmark across all configured AI providers. Measures TTFT (time to first token), TPS (tokens/sec), total latency, and token count for each model.",
   {
-    prompt: z.string().optional().describe("Custom prompt to use (defaults to a standardized 50-token prompt)"),
+    prompt: z.string().optional().describe("Custom prompt to use (defaults to the standardized benchmark prompt)"),
   },
   async ({ prompt }) => {
     const p = prompt || DEFAULT_PROMPT;
