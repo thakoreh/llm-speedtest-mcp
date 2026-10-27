@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
+const entry = process.env.QA_ENTRY || fileURLToPath(new URL('../dist/index.js', import.meta.url));
+
 for (const [provider, model, key] of [
   ['OpenAI', 'gpt-4o', 'OPENAI_API_KEY'],
   ['Anthropic', 'claude-sonnet-4-20250514', 'ANTHROPIC_API_KEY'],
@@ -14,7 +16,7 @@ for (const [provider, model, key] of [
         command: process.execPath,
         args: [
           '--require', fileURLToPath(new URL('./fixtures/mock-provider.cjs', import.meta.url)),
-          fileURLToPath(new URL('../dist/index.js', import.meta.url)),
+          entry,
         ],
         env: { [key]: 'offline-fixture-not-a-real-key', BENCHMARK_FIXTURE_SPLIT: String(split) },
         stderr: 'pipe',
@@ -42,7 +44,7 @@ for (const [provider, model, key] of [
       command: process.execPath,
       args: [
         '--require', fileURLToPath(new URL('./fixtures/mock-provider.cjs', import.meta.url)),
-        fileURLToPath(new URL('../dist/index.js', import.meta.url)),
+        entry,
       ],
       env: { [key]: 'offline-fixture-not-a-real-key', BENCHMARK_FIXTURE_EMPTY: 'true' },
       stderr: 'pipe',

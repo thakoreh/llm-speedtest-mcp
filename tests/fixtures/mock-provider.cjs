@@ -26,6 +26,7 @@ globalThis.fetch = async (url) => {
     body: {
       getReader: () => ({
         releaseLock() {},
+        async cancel() {},
         async read() {
           if (index === chunks.length) return { done: true };
           clock = times[index];

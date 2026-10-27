@@ -86,8 +86,12 @@ const MAX_TOKENS = 256;
 // ─── Helpers ─────────────────────────────────────────────────────────────────────
 
 function getKey(provider: Provider): string | undefined {
-  return process.env[provider.envKey] || (provider.envKeyAlt ? process.env[provider.envKeyAlt] : undefined);
+  return process.env[provider.envKey]?.trim() || (provider.envKeyAlt ? process.env[provider.envKeyAlt]?.trim() : undefined);
 }
+
+class ProviderError extends Error {}
+const timeoutSchema = z.number().int().min(1).max(300000).optional()
+  .describe("Per-model request timeout in milliseconds (default 60000, maximum 300000)");
 
 interface BenchmarkResult {
   provider: string;
@@ -106,7 +110,7 @@ function estimateTokens(text: string): number {
 
 // Network chunks do not necessarily end at an SSE data-line boundary.
 async function* readDataLines(response: Response): AsyncGenerator<string> {
-  if (!response.body) throw new Error("Provider response has no streaming body");
+  if (!response.body) throw new ProviderError("Provider response has no streaming body");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let pending = "";
@@ -127,6 +131,7 @@ async function* readDataLines(response: Response): AsyncGenerator<string> {
       }
     }
   } finally {
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
@@ -137,14 +142,18 @@ async function benchmarkOpenAI(
   provider: Provider,
   model: string,
   prompt: string,
-  apiKey: string
+  apiKey: string,
+  signal: AbortSignal
 ): Promise<BenchmarkResult> {
   const url = `${provider.baseUrl}/chat/completions`;
   const startTime = performance.now();
   let ttft: number | null = null;
   let fullText = "";
+  let completed = false;
 
   const response = await fetch(url, {
+    signal,
+    redirect: "error",
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -159,25 +168,24 @@ async function benchmarkOpenAI(
   });
 
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`HTTP ${response.status}: ${errText.slice(0, 200)}`);
+    await response.body?.cancel();
+    throw new ProviderError(`HTTP ${response.status}`);
   }
 
   for await (const data of readDataLines(response)) {
-    if (data === "[DONE]") break;
-    try {
-      const parsed = JSON.parse(data);
-      const delta = parsed.choices?.[0]?.delta?.content;
-      if (delta) {
-        if (ttft === null) ttft = performance.now() - startTime;
-        fullText += delta;
-      }
-    } catch {
-      // Ignore non-JSON protocol lines; complete data lines are retained across reads.
+    if (data === "[DONE]") { completed = true; break; }
+    let parsed;
+    try { parsed = JSON.parse(data); } catch { continue; }
+    if (parsed.error) throw new ProviderError("Provider stream returned an error");
+    const delta = parsed.choices?.[0]?.delta?.content;
+    if (typeof delta === "string" && delta) {
+      if (ttft === null) ttft = performance.now() - startTime;
+      fullText += delta;
     }
   }
 
-  if (ttft === null || !fullText) throw new Error("No text content received from provider");
+  if (ttft === null || !fullText) throw new ProviderError("No text content received from provider");
+  if (!completed) throw new ProviderError("Provider stream ended early");
   const totalMs = performance.now() - startTime;
   const tokens = estimateTokens(fullText);
   const generationMs = totalMs - ttft;
@@ -198,14 +206,18 @@ async function benchmarkAnthropic(
   provider: Provider,
   model: string,
   prompt: string,
-  apiKey: string
+  apiKey: string,
+  signal: AbortSignal
 ): Promise<BenchmarkResult> {
   const url = `${provider.baseUrl}/v1/messages`;
   const startTime = performance.now();
   let ttft: number | null = null;
   let fullText = "";
+  let completed = false;
 
   const response = await fetch(url, {
+    signal,
+    redirect: "error",
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -222,24 +234,24 @@ async function benchmarkAnthropic(
   });
 
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`HTTP ${response.status}: ${errText.slice(0, 200)}`);
+    await response.body?.cancel();
+    throw new ProviderError(`HTTP ${response.status}`);
   }
 
   for await (const data of readDataLines(response)) {
-    if (data === "[DONE]") break;
-    try {
-      const parsed = JSON.parse(data);
-      if (parsed.type === "content_block_delta" && parsed.delta?.text) {
-        if (ttft === null) ttft = performance.now() - startTime;
-        fullText += parsed.delta.text;
-      }
-    } catch {
-      // Ignore non-JSON protocol lines; complete data lines are retained across reads.
+    if (data === "[DONE]") { completed = true; break; }
+    let parsed;
+    try { parsed = JSON.parse(data); } catch { continue; }
+    if (parsed.type === "error" || parsed.error) throw new ProviderError("Provider stream returned an error");
+    if (parsed.type === "message_stop") { completed = true; break; }
+    if (parsed.type === "content_block_delta" && typeof parsed.delta?.text === "string" && parsed.delta.text) {
+      if (ttft === null) ttft = performance.now() - startTime;
+      fullText += parsed.delta.text;
     }
   }
 
-  if (ttft === null || !fullText) throw new Error("No text content received from provider");
+  if (ttft === null || !fullText) throw new ProviderError("No text content received from provider");
+  if (!completed) throw new ProviderError("Provider stream ended early");
   const totalMs = performance.now() - startTime;
   const tokens = estimateTokens(fullText);
   const generationMs = totalMs - ttft;
@@ -256,13 +268,18 @@ async function benchmarkAnthropic(
 
 // ─── Run One Benchmark ───────────────────────────────────────────────────────────
 
-async function runBenchmark(provider: Provider, model: string, prompt: string): Promise<BenchmarkResult> {
+async function runBenchmark(provider: Provider, model: string, prompt: string, signal: AbortSignal, timeoutMs = 60000): Promise<BenchmarkResult> {
   const apiKey = getKey(provider)!;
+  const controller = new AbortController();
+  const cancel = () => controller.abort(new ProviderError("Request cancelled"));
+  signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) cancel();
+  const timer = setTimeout(() => controller.abort(new ProviderError("Request timed out")), timeoutMs);
   try {
-    return provider.format === "anthropic"
-      ? await benchmarkAnthropic(provider, model, prompt, apiKey)
-      : await benchmarkOpenAI(provider, model, prompt, apiKey);
-  } catch (err: any) {
+    return await (provider.format === "anthropic"
+      ? benchmarkAnthropic(provider, model, prompt, apiKey, controller.signal)
+      : benchmarkOpenAI(provider, model, prompt, apiKey, controller.signal));
+  } catch (err) {
     return {
       provider: provider.name,
       model,
@@ -270,8 +287,13 @@ async function runBenchmark(provider: Provider, model: string, prompt: string): 
       tps: 0,
       totalMs: 0,
       tokens: 0,
-      error: err.message || String(err),
+      // Provider bodies and network exceptions can echo credentials. Only expose our own messages.
+      error: controller.signal.aborted ? controller.signal.reason.message
+        : err instanceof ProviderError ? err.message : "Provider request failed",
     };
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", cancel);
   }
 }
 
@@ -343,13 +365,15 @@ server.tool(
   "Run a speed benchmark across all configured AI providers. Measures TTFT (time to first token), TPS (tokens/sec), total latency, and token count for each model.",
   {
     prompt: z.string().optional().describe("Custom prompt to use (defaults to the standardized benchmark prompt)"),
+    timeout_ms: timeoutSchema,
   },
-  async ({ prompt }) => {
+  async ({ prompt, timeout_ms }, extra) => {
     const p = prompt || DEFAULT_PROMPT;
     const configured = PROVIDERS.filter((p) => !!getKey(p));
 
     if (configured.length === 0) {
       return {
+        isError: true,
         content: [
           {
             type: "text",
@@ -363,14 +387,14 @@ server.tool(
     const allBenchmarks: Promise<BenchmarkResult>[] = [];
     for (const provider of configured) {
       for (const model of provider.models) {
-        allBenchmarks.push(runBenchmark(provider, model, p));
+        allBenchmarks.push(runBenchmark(provider, model, p, extra.signal, timeout_ms));
       }
     }
 
     const results = await Promise.all(allBenchmarks);
     const text = formatResults(results);
 
-    return { content: [{ type: "text", text }] };
+    return { isError: results.every(result => !!result.error), content: [{ type: "text", text }] };
   }
 );
 
@@ -381,37 +405,50 @@ server.tool(
     provider: z.string().describe("Provider name (e.g., 'OpenAI', 'Anthropic', 'Groq', 'OpenRouter', 'DeepSeek', 'MiniMax', 'Zhipu/ZAI', 'Kimi/Moonshot')"),
     model: z.string().describe("Model ID (e.g., 'gpt-4o', 'claude-sonnet-4-20250514')"),
     prompt: z.string().optional().describe("Custom prompt (defaults to standardized benchmark prompt)"),
+    timeout_ms: timeoutSchema,
   },
-  async ({ provider: providerName, model, prompt }) => {
+  async ({ provider: providerName, model, prompt, timeout_ms }, extra) => {
     const p = prompt || DEFAULT_PROMPT;
     const provider = PROVIDERS.find((pr) => pr.name.toLowerCase() === providerName.toLowerCase());
 
     if (!provider) {
       const names = PROVIDERS.map((p) => p.name).join(", ");
-      return { content: [{ type: "text", text: `Unknown provider "${providerName}". Available: ${names}` }] };
+      return { isError: true, content: [{ type: "text", text: `Unknown provider "${providerName}". Available: ${names}` }] };
     }
 
     if (!getKey(provider)) {
-      return { content: [{ type: "text", text: `Provider ${provider.name} is not configured. Set ${provider.envKey}.` }] };
+      return { isError: true, content: [{ type: "text", text: `Provider ${provider.name} is not configured. Set ${provider.envKey}.` }] };
     }
 
     if (!provider.models.includes(model)) {
       return {
+        isError: true,
         content: [
           { type: "text", text: `Model "${model}" not found for ${provider.name}. Available: ${provider.models.join(", ")}` },
         ],
       };
     }
 
-    const result = await runBenchmark(provider, model, p);
+    const result = await runBenchmark(provider, model, p, extra.signal, timeout_ms);
     const text = formatResults([result]);
-    return { content: [{ type: "text", text }] };
+    return { isError: !!result.error, content: [{ type: "text", text }] };
   }
 );
 
 // ─── Start ───────────────────────────────────────────────────────────────────────
 
 async function main() {
+  const args = process.argv.slice(2);
+  if (args.length) {
+    if (args.length === 1 && ["--help", "-h"].includes(args[0])) {
+      console.log("Usage: llm-speedtest-mcp [--help | --version]\nStarts an MCP server over stdio. Configure provider API keys in the client environment.");
+      return;
+    }
+    if (args.length === 1 && args[0] === "--version") { console.log("0.1.0"); return; }
+    console.error("Unknown arguments. Use --help for usage.");
+    process.exitCode = 1;
+    return;
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
