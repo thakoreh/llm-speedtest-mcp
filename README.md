@@ -4,7 +4,7 @@
 
 Run it locally inside your MCP client to compare first-text latency, total latency and estimated output throughput. Use your own provider accounts and explicitly choose the models to test.
 
-> **Unreleased configuration changes:** this branch removes the fixed model catalog and requires explicit bulk model selection and regional-provider configuration. The published source release is still **v0.1.1**; it does not contain these changes. Keep the stable install below for that release. To test this PR instead, replace `git checkout v0.1.1` with `git checkout fix/explicit-models-regional-endpoints`. The configuration sections below describe this branch, not the unchanged v0.1.1 tag.
+> **Upgrading from v0.1.1:** v0.2.0 removes the fixed model catalog. Bulk benchmarks now require explicit `*_MODELS` selections; MiniMax, ZAI and Kimi require `*_REGION=global|cn`. A configured API key alone no longer starts a bulk benchmark. See the configuration guide below before upgrading.
 
 ## 🚀 Quick Start
 
@@ -13,13 +13,13 @@ Install from source with Node.js 20 or newer (required by the patched dependency
 ```bash
 git clone https://github.com/thakoreh/llm-speedtest-mcp.git
 cd llm-speedtest-mcp
-git checkout v0.1.1
+git checkout v0.2.0
 npm ci
 npm run build
 node dist/index.js --version
 ```
 
-The tested source release is `v0.1.1`. See [CHANGELOG.md](CHANGELOG.md).
+The tested source release is `v0.2.0`. See [CHANGELOG.md](CHANGELOG.md).
 The GitHub tag pins the source installation; the package remains unpublished on npm.
 
 Use the absolute path to `dist/index.js` in your MCP client configuration. On Windows, forward slashes work in JSON paths, for example `C:/tools/llm-speedtest-mcp/dist/index.js`.

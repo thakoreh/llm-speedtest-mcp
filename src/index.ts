@@ -383,7 +383,7 @@ function formatResults(results: BenchmarkResult[]): string {
 
 const server = new McpServer({
   name: "llm-speedtest-mcp",
-  version: "0.1.1",
+  version: "0.2.0",
 });
 
 server.tool("list_providers", "Show which AI providers are configured (detects API keys from environment variables). Does NOT show key values.", {}, async () => {
@@ -506,7 +506,7 @@ async function main() {
       console.log("Usage: llm-speedtest-mcp [--help | --version]\nStarts an MCP server over stdio. Configure provider API keys in the client environment.");
       return;
     }
-    if (args.length === 1 && args[0] === "--version") { console.log("0.1.1"); return; }
+    if (args.length === 1 && args[0] === "--version") { console.log("0.2.0"); return; }
     console.error("Unknown arguments. Use --help for usage.");
     process.exitCode = 1;
     return;
