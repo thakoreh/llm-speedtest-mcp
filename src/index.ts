@@ -14,79 +14,120 @@ interface Provider {
   envKey: string;
   envKeyAlt?: string;
   baseUrl: string;
-  models: string[];
+  configPrefix: string;
+  regions?: Record<string, string>;
+  thinkingModes?: string[];
+  tokenParameter?: "max_completion_tokens";
   format: "openai" | "anthropic";
 }
 
 const PROVIDERS: Provider[] = [
   {
     name: "OpenAI",
+    configPrefix: "OPENAI",
+    tokenParameter: "max_completion_tokens",
     envKey: "OPENAI_API_KEY",
     baseUrl: "https://api.openai.com/v1",
-    models: ["gpt-4o", "gpt-4o-mini"],
     format: "openai",
   },
   {
     name: "Anthropic",
+    configPrefix: "ANTHROPIC",
     envKey: "ANTHROPIC_API_KEY",
     baseUrl: "https://api.anthropic.com",
-    models: ["claude-sonnet-4-20250514", "claude-haiku-4-20250414"],
     format: "anthropic",
   },
   {
     name: "Groq",
+    configPrefix: "GROQ",
+    tokenParameter: "max_completion_tokens",
     envKey: "GROQ_API_KEY",
     baseUrl: "https://api.groq.com/openai/v1",
-    models: ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
     format: "openai",
   },
   {
     name: "OpenRouter",
+    configPrefix: "OPENROUTER",
     envKey: "OPENROUTER_API_KEY",
     baseUrl: "https://openrouter.ai/api/v1",
-    models: ["deepseek/deepseek-r1", "google/gemini-2.0-flash-001"],
     format: "openai",
   },
   {
     name: "DeepSeek",
+    configPrefix: "DEEPSEEK",
+    thinkingModes: ["enabled", "disabled"],
     envKey: "DEEPSEEK_API_KEY",
     baseUrl: "https://api.deepseek.com/v1",
-    models: ["deepseek-chat", "deepseek-reasoner"],
     format: "openai",
   },
   {
     name: "MiniMax",
+    configPrefix: "MINIMAX",
+    thinkingModes: ["adaptive", "disabled"],
+    tokenParameter: "max_completion_tokens",
     envKey: "MINIMAX_API_KEY",
-    baseUrl: "https://api.minimax.chat/v1",
-    models: ["MiniMax-M1", "MiniMax-Text-01"],
+    baseUrl: "",
+    regions: { global: "https://api.minimax.io/v1", cn: "https://api.minimax.cn/v1" },
     format: "openai",
   },
   {
     name: "Zhipu/ZAI",
+    configPrefix: "ZAI",
+    thinkingModes: ["enabled", "disabled"],
     envKey: "ZAI_API_KEY",
     envKeyAlt: "ZHIPU_API_KEY",
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    models: ["glm-4-plus", "glm-4-flash"],
+    baseUrl: "",
+    regions: { global: "https://api.z.ai/api/paas/v4", cn: "https://open.bigmodel.cn/api/paas/v4" },
     format: "openai",
   },
   {
     name: "Kimi/Moonshot",
+    configPrefix: "KIMI",
     envKey: "KIMI_API_KEY",
     envKeyAlt: "MOONSHOT_API_KEY",
-    baseUrl: "https://api.moonshot.cn/v1",
-    models: ["moonshot-v1-8k", "moonshot-v1-32k"],
+    baseUrl: "",
+    regions: { global: "https://api.moonshot.ai/v1", cn: "https://api.moonshot.cn/v1" },
     format: "openai",
   },
 ];
 
 const DEFAULT_PROMPT =
   "Explain the concept of recursion in programming using a simple analogy. Keep your explanation clear and concise, suitable for a beginner. Use a real-world example to illustrate how recursion works step by step.";
-const MAX_TOKENS = 256;
+const DEFAULT_MAX_TOKENS = 256;
+const maxTokensSchema = z.number().int().min(1).max(4096).optional()
+  .describe("Maximum output token budget per model (default 256, maximum 4096). Reasoning can consume this budget before visible text.");
+const modelSchema = z.string().trim().min(1).max(256).refine(value => !/[\x00-\x1f\x7f]/.test(value), "Model ID must not contain control characters");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────────
 
 function getKey(provider: Provider): string | undefined {
   return process.env[provider.envKey]?.trim() || (provider.envKeyAlt ? process.env[provider.envKeyAlt]?.trim() : undefined);
+}
+
+function selectedModels(provider: Provider): string[] {
+  const raw = process.env[`${provider.configPrefix}_MODELS`]?.trim();
+  if (!raw) return [];
+  const models = raw.split(",").map(model => model.trim());
+  if (models.length > 8 || models.some(model => !modelSchema.safeParse(model).success)) {
+    throw new ProviderError(`Set ${provider.configPrefix}_MODELS to 1–8 comma-separated, non-empty model IDs`);
+  }
+  return [...new Set(models)];
+}
+
+function providerConfig(provider: Provider): { baseUrl: string; thinking?: { type: string } } {
+  let baseUrl = provider.baseUrl;
+  if (provider.regions) {
+    const region = process.env[`${provider.configPrefix}_REGION`]?.trim().toLowerCase();
+    if (!region || !Object.hasOwn(provider.regions, region)) {
+      throw new ProviderError(`Set ${provider.configPrefix}_REGION to global or cn for your account`);
+    }
+    baseUrl = provider.regions[region];
+  }
+  const thinking = process.env[`${provider.configPrefix}_THINKING`]?.trim().toLowerCase();
+  if (thinking && (!provider.thinkingModes?.includes(thinking))) {
+    throw new ProviderError(`${provider.configPrefix}_THINKING is unsupported or invalid; omit it or use a supported provider mode`);
+  }
+  return { baseUrl, ...(thinking ? { thinking: { type: thinking } } : {}) };
 }
 
 class ProviderError extends Error {}
@@ -143,9 +184,11 @@ async function benchmarkOpenAI(
   model: string,
   prompt: string,
   apiKey: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  maxTokens: number
 ): Promise<BenchmarkResult> {
-  const url = `${provider.baseUrl}/chat/completions`;
+  const config = providerConfig(provider);
+  const url = `${config.baseUrl}/chat/completions`;
   const startTime = performance.now();
   let ttft: number | null = null;
   let fullText = "";
@@ -162,7 +205,8 @@ async function benchmarkOpenAI(
     body: JSON.stringify({
       model,
       messages: [{ role: "user", content: prompt }],
-      max_tokens: MAX_TOKENS,
+      [provider.tokenParameter || "max_tokens"]: maxTokens,
+      ...(config.thinking ? { thinking: config.thinking } : {}),
       stream: true,
     }),
   });
@@ -207,9 +251,11 @@ async function benchmarkAnthropic(
   model: string,
   prompt: string,
   apiKey: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  maxTokens: number
 ): Promise<BenchmarkResult> {
-  const url = `${provider.baseUrl}/v1/messages`;
+  const config = providerConfig(provider);
+  const url = `${config.baseUrl}/v1/messages`;
   const startTime = performance.now();
   let ttft: number | null = null;
   let fullText = "";
@@ -227,7 +273,7 @@ async function benchmarkAnthropic(
     },
     body: JSON.stringify({
       model,
-      max_tokens: MAX_TOKENS,
+      max_tokens: maxTokens,
       messages: [{ role: "user", content: prompt }],
       stream: true,
     }),
@@ -268,7 +314,7 @@ async function benchmarkAnthropic(
 
 // ─── Run One Benchmark ───────────────────────────────────────────────────────────
 
-async function runBenchmark(provider: Provider, model: string, prompt: string, signal: AbortSignal, timeoutMs = 60000): Promise<BenchmarkResult> {
+async function runBenchmark(provider: Provider, model: string, prompt: string, signal: AbortSignal, timeoutMs = 60000, maxTokens = DEFAULT_MAX_TOKENS): Promise<BenchmarkResult> {
   const apiKey = getKey(provider)!;
   const controller = new AbortController();
   const cancel = () => controller.abort(new ProviderError("Request cancelled"));
@@ -277,8 +323,8 @@ async function runBenchmark(provider: Provider, model: string, prompt: string, s
   const timer = setTimeout(() => controller.abort(new ProviderError("Request timed out")), timeoutMs);
   try {
     return await (provider.format === "anthropic"
-      ? benchmarkAnthropic(provider, model, prompt, apiKey, controller.signal)
-      : benchmarkOpenAI(provider, model, prompt, apiKey, controller.signal));
+      ? benchmarkAnthropic(provider, model, prompt, apiKey, controller.signal, maxTokens)
+      : benchmarkOpenAI(provider, model, prompt, apiKey, controller.signal, maxTokens));
   } catch (err) {
     return {
       provider: provider.name,
@@ -349,7 +395,14 @@ server.tool("list_providers", "Show which AI providers are configured (detects A
     const keyHint = hasKey ? `(${p.envKey} is set)` : `(set ${p.envKey}${p.envKeyAlt ? ` or ${p.envKeyAlt}` : ""})`;
     lines.push(`  ${status} ${p.name} ${keyHint}`);
     if (hasKey) {
-      lines.push(`    Models: ${p.models.join(", ")}`);
+      try {
+        const models = selectedModels(p);
+        lines.push(`    Bulk models: ${models.length ? models.join(", ") : `not selected (set ${p.configPrefix}_MODELS, or use benchmark_model)`}`);
+        const config = providerConfig(p);
+        lines.push(`    Endpoint: ${config.baseUrl}`);
+      } catch (error) {
+        lines.push(`    Configuration required: ${(error as ProviderError).message}`);
+      }
     }
   }
 
@@ -362,12 +415,13 @@ server.tool("list_providers", "Show which AI providers are configured (detects A
 
 server.tool(
   "benchmark_models",
-  "Run a speed benchmark across all configured AI providers. Measures TTFT (time to first token), TPS (tokens/sec), total latency, and token count for each model.",
+  "Run a speed benchmark for explicit per-provider *_MODELS selections. Configured keys alone do not start requests. Measures first-text latency, estimated tokens/sec and total latency.",
   {
     prompt: z.string().optional().describe("Custom prompt to use (defaults to the standardized benchmark prompt)"),
     timeout_ms: timeoutSchema,
+    max_tokens: maxTokensSchema,
   },
-  async ({ prompt, timeout_ms }, extra) => {
+  async ({ prompt, timeout_ms, max_tokens }, extra) => {
     const p = prompt || DEFAULT_PROMPT;
     const configured = PROVIDERS.filter((p) => !!getKey(p));
 
@@ -383,16 +437,29 @@ server.tool(
       };
     }
 
-    // Run all models across all configured providers
-    const allBenchmarks: Promise<BenchmarkResult>[] = [];
-    for (const provider of configured) {
-      for (const model of provider.models) {
-        allBenchmarks.push(runBenchmark(provider, model, p, extra.signal, timeout_ms));
+    // Preflight every selected provider before starting any network request.
+    // No implicit catalog: the operator explicitly opts models into a bulk run.
+    const selections: { provider: Provider; models: string[] }[] = [];
+    try {
+      for (const provider of configured) {
+        const models = selectedModels(provider);
+        if (!models.length) continue;
+        providerConfig(provider);
+        selections.push({ provider, models });
       }
+    } catch (error) {
+      return { isError: true, content: [{ type: "text", text: (error as ProviderError).message }] };
     }
+    if (!selections.length) {
+      return { isError: true, content: [{ type: "text", text: "No bulk models selected. Set a configured provider's *_MODELS variable (for example OPENAI_MODELS), or call benchmark_model with an explicit model ID." }] };
+    }
+    const allBenchmarks = selections.flatMap(({ provider, models }) => models.map(model =>
+      runBenchmark(provider, model, p, extra.signal, timeout_ms, max_tokens)));
 
     const results = await Promise.all(allBenchmarks);
-    const text = formatResults(results);
+    const skipped = configured.filter(provider => !selections.some(selection => selection.provider === provider));
+    const text = formatResults(results) + (skipped.length
+      ? `\n\nSkipped (no *_MODELS selection): ${skipped.map(provider => provider.name).join(", ")}` : "");
 
     return { isError: results.every(result => !!result.error), content: [{ type: "text", text }] };
   }
@@ -403,11 +470,12 @@ server.tool(
   "Benchmark a single specific model with a custom prompt. Provide provider name and model.",
   {
     provider: z.string().describe("Provider name (e.g., 'OpenAI', 'Anthropic', 'Groq', 'OpenRouter', 'DeepSeek', 'MiniMax', 'Zhipu/ZAI', 'Kimi/Moonshot')"),
-    model: z.string().describe("Model ID (e.g., 'gpt-4o', 'claude-sonnet-4-20250514')"),
+    model: modelSchema.describe("Explicit model ID supported by your provider account. No built-in model whitelist."),
     prompt: z.string().optional().describe("Custom prompt (defaults to standardized benchmark prompt)"),
     timeout_ms: timeoutSchema,
+    max_tokens: maxTokensSchema,
   },
-  async ({ provider: providerName, model, prompt, timeout_ms }, extra) => {
+  async ({ provider: providerName, model, prompt, timeout_ms, max_tokens }, extra) => {
     const p = prompt || DEFAULT_PROMPT;
     const provider = PROVIDERS.find((pr) => pr.name.toLowerCase() === providerName.toLowerCase());
 
@@ -420,16 +488,10 @@ server.tool(
       return { isError: true, content: [{ type: "text", text: `Provider ${provider.name} is not configured. Set ${provider.envKey}.` }] };
     }
 
-    if (!provider.models.includes(model)) {
-      return {
-        isError: true,
-        content: [
-          { type: "text", text: `Model "${model}" not found for ${provider.name}. Available: ${provider.models.join(", ")}` },
-        ],
-      };
+    try { providerConfig(provider); } catch (error) {
+      return { isError: true, content: [{ type: "text", text: (error as ProviderError).message }] };
     }
-
-    const result = await runBenchmark(provider, model, p, extra.signal, timeout_ms);
+    const result = await runBenchmark(provider, model, p, extra.signal, timeout_ms, max_tokens);
     const text = formatResults([result]);
     return { isError: !!result.error, content: [{ type: "text", text }] };
   }
