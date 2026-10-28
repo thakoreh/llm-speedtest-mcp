@@ -20,6 +20,6 @@ try {
   const manifest = JSON.parse(readFileSync(join(consumer, 'node_modules', 'llm-speedtest-mcp', 'package.json')));
   if (!manifest.dependencies.zod) throw new Error('Direct Zod runtime dependency missing');
   assert.equal(run(process.execPath, [entry, '--version']).trim(), manifest.version);
-  process.stdout.write(run(process.execPath, ['--test', resolve('tests/benchmark.test.mjs'), resolve('tests/onboarding.test.mjs')],
+  process.stdout.write(run(process.execPath, ['--test', resolve('tests/benchmark.test.mjs'), resolve('tests/onboarding.test.mjs'), resolve('tests/configuration.test.mjs')],
     { env: { ...process.env, QA_ENTRY: entry } }));
 } finally { rmSync(consumer, { recursive: true, force: true }); }

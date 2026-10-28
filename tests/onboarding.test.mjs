@@ -35,8 +35,8 @@ test('fresh session: handshake, list, missing keys, unknown provider/model and r
     for (let i = 0; i < 2; i++) assert.match(textOf(await call(client)), /not configured/);
     assert.match(textOf(await call(client, { provider: 'unknown' })), /Unknown provider/);
   });
-  await session({ OPENAI_API_KEY: secret }, async client => {
-    assert.match(textOf(await call(client, { model: 'unknown' })), /not found/);
+  await session({ OPENAI_API_KEY: secret, QA_FAILURE: 'success' }, async client => {
+    assert.equal((await call(client, { model: 'new-provider-model' })).isError, false);
     const invalid = await call(client, { model: 42 });
     assert.equal(invalid.isError, true);
   });
@@ -44,7 +44,8 @@ test('fresh session: handshake, list, missing keys, unknown provider/model and r
 test('all eight providers, alternate keys, whitespace input and normal repeated benchmarks', async () => {
   const keys = Object.fromEntries(['OPENAI', 'ANTHROPIC', 'GROQ', 'OPENROUTER', 'DEEPSEEK', 'MINIMAX', 'ZHIPU', 'MOONSHOT']
     .map(name => [`${name}_API_KEY`, secret]));
-  await session({ ...keys, QA_FAILURE: 'success' }, async client => {
+  await session({ ...keys, MINIMAX_REGION: 'global', ZAI_REGION: 'global', KIMI_REGION: 'global',
+    ...Object.fromEntries(['OPENAI', 'ANTHROPIC', 'GROQ', 'OPENROUTER', 'DEEPSEEK', 'MINIMAX', 'ZAI', 'KIMI'].map(name => [`${name}_MODELS`, 'fixture-model'])), QA_FAILURE: 'success' }, async client => {
     const listed = textOf(await client.callTool({ name: 'list_providers', arguments: {} }));
     assert.match(listed, /8\/8 providers configured/);
     assert.doesNotMatch(listed, new RegExp(secret));
@@ -52,7 +53,7 @@ test('all eight providers, alternate keys, whitespace input and normal repeated 
       const result = await client.callTool({ name: 'benchmark_models', arguments: { prompt: '' } });
       assert.equal(result.isError, false, textOf(result));
       assert.doesNotMatch(textOf(result), /ERROR:/);
-      assert.match(textOf(result), /moonshot-v1-32k/);
+      assert.match(textOf(result), /Kimi\/Moonshot/);
     }
   });
   await session({ OPENAI_API_KEY: '  ' }, async client => {

@@ -1,12 +1,13 @@
 // Every request stays in this process. Never delegate to real fetch.
 const assert = require('node:assert/strict');
 globalThis.fetch = async (url, options) => {
-  assert.match(url, /^https:\/\/(api\.openai\.com|api\.anthropic\.com|api\.groq\.com|openrouter\.ai|api\.deepseek\.com|api\.minimax\.chat|open\.bigmodel\.cn|api\.moonshot\.cn)\//);
+  assert.match(url, /^https:\/\/(api\.openai\.com|api\.anthropic\.com|api\.groq\.com|openrouter\.ai|api\.deepseek\.com|api\.minimax\.io|api\.minimax\.cn|api\.z\.ai|open\.bigmodel\.cn|api\.moonshot\.ai|api\.moonshot\.cn)\//);
   assert.equal(options.method, 'POST');
   assert.equal(options.redirect, 'error');
   const body = JSON.parse(options.body);
   assert.equal(body.stream, true);
-  assert.equal(body.max_tokens, 256);
+  const completion = /api\.(openai\.com|groq\.com|minimax\.io|minimax\.cn)/.test(url);
+  assert.equal(body[completion ? 'max_completion_tokens' : 'max_tokens'], 256);
   assert.equal(typeof body.messages[0].content, 'string');
   const mode = process.env.QA_FAILURE;
   if (mode === 'success') {
